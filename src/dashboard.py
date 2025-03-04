@@ -1,64 +1,104 @@
 import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
-from sqlalchemy import create_engine
+import requests
 import os
 from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
-DATABASE_URL = os.getenv("DATABASE_URL")
-engine = create_engine(DATABASE_URL)
+API_URL = "http://127.0.0.1:8000/movies"
 
 # Set page config
 st.set_page_config(page_title="Movie Dashboard", layout="wide")
 
-# Load data
-def get_movies():
-    query = "SELECT id, title, release_date, vote_average, overview, poster_path FROM movies"
-    return pd.read_sql(query, engine)
+@st.cache_data
+def get_movies(search="", page=1, page_size=100):
+    """Fetch dữ liệu phim từ API với hỗ trợ tìm kiếm"""
+    params = {"page": page, "page_size": page_size}
+    if search:
+        params["search"] = search
 
-movies_df = get_movies()
-movies_df["release_date"] = pd.to_datetime(movies_df["release_date"])
-movies_df["year"] = movies_df["release_date"].dt.year
+    response = requests.get(API_URL, params=params)
+    if response.status_code == 200:
+        movies = response.json()["movies"]
+        df = pd.DataFrame(movies)
+        df["release_date"] = pd.to_datetime(df["release_date"])
+        df["year"] = df["release_date"].dt.year
+        return df
+    else:
+        st.error("❌ Không thể tải dữ liệu từ API")
+        return pd.DataFrame()
 
-# Sidebar filters
-st.sidebar.header("Filters")
-min_year, max_year = movies_df["year"].min(), movies_df["year"].max()
-selected_years = st.sidebar.slider("Select Year Range", min_year, max_year, (min_year, max_year))
+# 🎛️ **Sidebar - Bộ lọc phim**
+st.sidebar.header("🎛️ Bộ lọc phim")
+
+# 🔍 **Tìm kiếm phim**
+search_query = st.sidebar.text_input("🔍 Tìm kiếm phim", "")
+
+# 📥 **Fetch data từ API**
+movies_df = get_movies(search=search_query)
+
+# ⚠️ **Nếu không có phim nào, hiển thị thông báo**
+if movies_df.empty:
+    st.warning("⚠️ Không tìm thấy phim nào!")
+    st.stop()
+
+# 📅 **Lọc theo năm**
+min_year = int(movies_df["year"].min())
+max_year = int(movies_df["year"].max())
+selected_years = st.sidebar.slider("📅 Chọn khoảng năm", min_year, max_year, (min_year, max_year))
+
+# ⭐ **Lọc theo điểm đánh giá**
 min_rating, max_rating = movies_df["vote_average"].min(), movies_df["vote_average"].max()
-selected_rating = st.sidebar.slider("Select Rating Range", min_rating, max_rating, (min_rating, max_rating))
+selected_rating = st.sidebar.slider("⭐ Điểm đánh giá", min_rating, max_rating, (min_rating, max_rating))
 
-# Apply filters
-filtered_df = movies_df[(movies_df["year"] >= selected_years[0]) & (movies_df["year"] <= selected_years[1]) & (movies_df["vote_average"] >= selected_rating[0]) & (movies_df["vote_average"] <= selected_rating[1])]
+# 🔎 **Áp dụng bộ lọc**
+filtered_df = movies_df[
+    (movies_df["year"] >= selected_years[0]) &
+    (movies_df["year"] <= selected_years[1]) &
+    (movies_df["vote_average"] >= selected_rating[0]) &
+    (movies_df["vote_average"] <= selected_rating[1])
+]
 
-# Dashboard title
-st.title("\U0001F3A5 Movie Dashboard")
-st.markdown("Danh sách phim được lấy từ PostgreSQL")
+# 🎬 **Dashboard title**
+st.title("🎬 Movie Dashboard")
+st.markdown("🚀 Danh sách phim lấy từ PostgreSQL")
 
-# Charts
+# --- **BIỂU ĐỒ** ---
 col1, col2 = st.columns(2)
 
+# 📊 **Biểu đồ số lượng phim theo năm**
 with col1:
-    st.subheader("Number of Movies per Year")
-    fig, ax = plt.subplots()
+    st.subheader("📊 Số lượng phim mỗi năm")
+    fig, ax = plt.subplots(figsize=(8, 4))
     filtered_df["year"].value_counts().sort_index().plot(kind="bar", ax=ax, color="skyblue")
+    ax.set_ylabel("Số phim")
     st.pyplot(fig)
 
+# 📈 **Biểu đồ điểm trung bình theo năm**
 with col2:
-    st.subheader("Average Rating per Year")
-    fig, ax = plt.subplots()
+    st.subheader("📈 Điểm trung bình mỗi năm")
+    fig, ax = plt.subplots(figsize=(8, 4))
     filtered_df.groupby("year")["vote_average"].mean().plot(kind="line", ax=ax, marker="o", color="orange")
+    ax.set_ylabel("Điểm trung bình")
     st.pyplot(fig)
 
-# Movie list with posters
-st.subheader("Movie List")
+# --- **DANH SÁCH PHIM** ---
+st.subheader("🎥 Danh sách phim")
+
 for index, row in filtered_df.iterrows():
-    col1, col2 = st.columns([1, 3])
+    col1, col2 = st.columns([1, 4])
+
     with col1:
-        st.image(f"https://image.tmdb.org/t/p/w200{row['poster_path']}", width=100)
+        if pd.notna(row["poster_path"]):
+            st.image(f"https://image.tmdb.org/t/p/w200{row['poster_path']}", width=120)
+        else:
+            st.image("https://via.placeholder.com/120x180?text=No+Image", width=120)
+
     with col2:
-        st.write(f"### {row['title']} ({row['year']})")
-        st.write(f"⭐ {row['vote_average']}")
+        st.markdown(f"### {row['title']} ({row['year']})")
+        st.write(f"⭐ **{row['vote_average']}**")
         st.write(row['overview'])
+
     st.markdown("---")

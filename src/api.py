@@ -2,54 +2,39 @@ from fastapi import FastAPI, Query
 from sqlalchemy import create_engine, text
 import os
 from dotenv import load_dotenv
-import pandas as pd
 
-# Load environment variables
+# Load biến môi trường
 load_dotenv()
 DATABASE_URL = os.getenv("DATABASE_URL")
 engine = create_engine(DATABASE_URL)
 
-# Initialize FastAPI app
 app = FastAPI()
 
 @app.get("/movies/")
 def get_movies(
-    year: int = Query(None, description="Filter by release year"),
-    min_rating: float = Query(None, description="Minimum vote average")
+    page: int = Query(1, ge=1),
+    page_size: int = Query(10, ge=1, le=100),
+    search: str = Query(None, min_length=1, max_length=100)
 ):
-    """Get movies with optional filters"""
-    query = "SELECT id, title, release_date, vote_average, overview, poster_path FROM movies"
-    conditions = []
-    
-    if year:
-        conditions.append(f"EXTRACT(YEAR FROM release_date) = {year}")
-    if min_rating:
-        conditions.append(f"vote_average >= {min_rating}")
-    
-    if conditions:
-        query += " WHERE " + " AND ".join(conditions)
-    
-    with engine.connect() as conn:
-        result = conn.execute(text(query))
-        movies = [dict(row) for row in result.mappings()]
-    
-    return {"movies": movies}
+    """API lấy danh sách phim có phân trang và hỗ trợ tìm kiếm theo tên"""
+    offset = (page - 1) * page_size
 
-@app.get("/movies/search/")
-def search_movies(title: str):
-    """Search movies by title"""
-    query = text("SELECT * FROM movies WHERE title ILIKE :title")
-    with engine.connect() as conn:
-        result = conn.execute(query, {"title": f"%{title}%"})
-        movies = [dict(row) for row in result.mappings()]
-    return {"movies": movies}
+    query = """
+        SELECT id, title, release_date, vote_average, overview, poster_path
+        FROM movies
+    """
+    
+    params = {"page_size": page_size, "offset": offset}
 
-@app.get("/movies/{movie_id}")
-def get_movie_details(movie_id: int):
-    """Get movie details by ID"""
-    query = text("SELECT * FROM movies WHERE id = :movie_id")
+    # Nếu có tìm kiếm, thêm điều kiện vào câu query
+    if search:
+        query += " WHERE LOWER(title) LIKE LOWER(:search)"
+        params["search"] = f"%{search}%"
+
+    query += " ORDER BY release_date DESC LIMIT :page_size OFFSET :offset"
+
     with engine.connect() as conn:
-        result = conn.execute(query, {"movie_id": movie_id}).mappings().first()
-    if result:
-        return result
-    return {"error": "Movie not found"}
+        result = conn.execute(text(query), params)
+        movies = [dict(row._mapping) for row in result]  
+
+    return {"page": page, "page_size": page_size, "movies": movies}
